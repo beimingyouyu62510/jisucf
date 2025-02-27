@@ -1,944 +1,396 @@
-// @ts-ignore
+//1、天书版2.5，修改版，支持反代功能，极简优化，最终版本，没什么好折腾的了
+//2、支持反代开关，私钥开关，订阅隐藏开关功能，去除UUID限制，clash私钥防止被薅请求数
+//3、修改了接口关闭逻辑，降低请求数和错误率（大幅度降低），CPU超出时间限制会增加一些（不过区别仅仅是原版主动切断，和超时了由CF自动切断的区别）
+//4、简单修改了一下反代逻辑，原版在调用反代时会重复尝试带原CFIP去交互访问，导致可能的来回跳，导致使用反代的时候解析速度变慢，修改以后可以增加一点点解析速度（这是猜的，要是没有改进就算了）
+//5、不用在意那些奇怪的变量名，根据后面注释的备注去改，大概也就前100行看一下备注就行，clash配置在底部，懂的可以根据自身需求修改
+//6、纯手搓配置，去除任何API外链，不支持任何外部变量修改和API，直接在线workers改好了部署就行，这样安全性史无前例，由于是纯手搓配置，所以节点要填完，不能留空，否则会因为识别不到节点而订阅失败
+//7、虽然加入了通用订阅，但是本人并未测试（已测试bypass没问题），请自行测试研究，如果不能用就算了，概不负责^_^
+//8、由于本人仅使用openclash和clash meta，其他平台软件均未测试，请自行测试研究，要是不能用就算了，不负责改进，继续概不负责^_^
+//9、由于本人纯菜，很多代码解释都是根据自己的理解瞎编的，专业的无视就好，单纯为了帮助小白理解代码大致原理^_^
+
 import { connect } from 'cloudflare:sockets';
 
-// How to generate your own UUID:
-// [Windows] Press "Win + R", input cmd and run:  Powershell -NoExit -Command "[guid]::NewGuid()"
-let userID = 'aad22fad-78c6-4c5d-8315-85e540434b47';
+let 哎呀呀这是我的ID啊 = ["622511"]; //这是你的ID，去除UUID规格限制，支持大小写字母和数字任意组合，安全性提高更不容易扫出，就是订阅链接的ID，[域名/ID]进入订阅页面
+let 哎呀呀这是我的虚假UUID = ["aad22fad-78c6-4c5d-8315-85e540434b47"]; //给订阅一个虚假UUID，因为很多客户端需要标准格式化的UUID，本worker并不验证UUID，这个UUID并不重要，只要是规格化的就行
 
-const พร็อกซีไอพีs = ['us02.cf01.us.kg'];
+let 咦这是我的私钥哎 = ["511622"]; //这是你的私钥，提高隐秘性安全性，就算别人扫到你的域名也无法链接，再也不怕别人薅请求数了^_^
+let 私钥开关 = true //是否启用私钥功能，true启用，false不启用，因为私钥功能只支持clash，如果打算使用通用订阅则需关闭私钥功能
 
-// if you want to use ipv6 or single พร็อกซีไอพี, please add comment at this line and remove comment at the next line
-let พร็อกซีไอพี = พร็อกซีไอพีs[Math.floor(Math.random() * พร็อกซีไอพีs.length)];
-// use single พร็อกซีไอพี instead of random
-// let พร็อกซีไอพี = 'cdn.xn--b6gac.eu.org';
-// ipv6 พร็อกซีไอพี example remove comment to use
-// let พร็อกซีไอพี = "[2a01:4f8:c2c:123f:64:5:6810:c55a]"
+let 隐藏订阅 = false //选择是否隐藏订阅页面，false不隐藏，true隐藏，当然隐藏后自己也无法订阅，因为配置固定，适合自己订阅后就隐藏，防止被爬订阅，并且可以到下方添加嘲讽语^_^
+let 嘲讽语 = "哎呀你找到了我，但是我就是不给你看，气不气，嘿嘿嘿" //隐藏订阅后，真实的订阅页面就会显示这段话，想写啥写啥
 
-let dohURL = 'https://sky.rethinkdns.com/1:-Pf_____9_8A_AMAIgE8kMABVDDmKOHTAKg='; // https://cloudflare-dns.com/dns-query or https://dns.google/dns-query
+const 我的优选 = 'yx.cf02.us.kg' //CF的节点，填域名或IP，好的优选一个就够了，由于CFcdn常规13端口开放，可以生成4个notls和4个tls节点，只保留了8个非常规端口的
 
-if (!isValidUUID(userID)) {
-	throw new Error('uuid is invalid');
-}
+const 启用反代功能 = true //选择是否启用反代功能，false，true，现在你可以自由的选择是否启用反代功能了
+const 反代IP = 'us02.cf02.us.kg' //反代IP或域名(当前填的是CM大佬的proxyip.fxxk.dedyn.io，建议用自己的)，不需要填端口，反代IP只是兜底策略，不能固定落地地区，可以结合非CF节点一起用并选择该节点，固定落地地区
+
+const 特殊优选 = 'yx.cf02.us.kg' //非CF的节点，填域名或IP，结合你的反代一起使用的话，这个节点可以完全的固定落地地区，例如同时都使用美国的
+const 特殊优选的端口 = '443' //非CF的节点端口
+const 非CF节点是否打开tls = 'true' //非CF的节点TLS开关，true，false，通用订阅此功能无效，默认使用tls
+
+const 我的备用ipv4 = 'www.visa.com' //备用节点，可以填自己的workers绑定的域名，CF自动小黄云代理，相当于有一个永久有效的备份节点，永不失联[这方法只针对托管域名到CF的玩家]
+const 我的备用ipv4端口 = '443' //端口
+const 我的备用ipv4是否打开tls = 'true' //TLS开关，true，false，通用订阅此功能无效，默认使用tls
+
+const 我的备用ipv6 = 'www.visa.com' //IPV6备用节点，clash改了双栈优先IPV6，意思同上，都是自定义的，想填备份的也行，想填别人的或自己的vps也行，填自己优选的官方IPV6也行
+const 我的备用ipv6端口 = '443' //端口
+const 我的备用ipv6是否打开tls = 'true' //TLS开关，true，false，通用订阅此功能无效，默认使用tls
+
+const 我的节点名字 = '天书' //自己的节点名字
+
+const 回落路径 = '/?ed=2560' //回落路径，一般不用改 '/?ed=2560' 使用这个代码并开启域名--速度--优化--协议优化--0-RTT连接恢复，可以改善使用体验，猜的^_^
+
+const 转码 = 'vl'
+const 转码2 = 'ess'
+const 符号 = '://'
+
+const 小猫 = 'cla'
+const 咪 = 'sh'
 
 export default {
-	/**
-	 * @param {import("@cloudflare/workers-types").Request} request
-	 * @param {{UUID: string, พร็อกซีไอพี: string, DNS_RESOLVER_URL: string, NODE_ID: int, API_HOST: string, API_TOKEN: string}} env
-	 * @param {import("@cloudflare/workers-types").ExecutionContext} ctx
-	 * @returns {Promise<Response>}
-	 */
-	async fetch(request, env, ctx) {
-		// uuid_validator(request);
-		try {
-			userID = env.UUID || userID;
-			พร็อกซีไอพี = env.PROXYIP || พร็อกซีไอพี;
-			dohURL = env.DNS_RESOLVER_URL || dohURL;
-			let userID_Path = userID;
-			if (userID.includes(',')) {
-				userID_Path = userID.split(',')[0];
-			}
-			const upgradeHeader = request.headers.get('Upgrade');
-			if (!upgradeHeader || upgradeHeader !== 'websocket') {
-				const url = new URL(request.url);
-				switch (url.pathname) {
-					case `/cf`: {
-						return new Response(JSON.stringify(request.cf, null, 4), {
-							status: 200,
-							headers: {
-								"Content-Type": "application/json;charset=utf-8",
-							},
-						});
-					}
-					case `/${userID_Path}`: {
-						const วเลสConfig = getวเลสConfig(userID, request.headers.get('Host'));
-						return new Response(`${วเลสConfig}`, {
-							status: 200,
-							headers: {
-								"Content-Type": "text/html; charset=utf-8",
-							}
-						});
-					};
-					case `/sub/${userID_Path}`: {
-						const url = new URL(request.url);
-						const searchParams = url.searchParams;
-						const วเลสSubConfig = สร้างวเลสSub(userID, request.headers.get('Host'));
-						// Construct and return response object
-						return new Response(btoa(วเลสSubConfig), {
-							status: 200,
-							headers: {
-								"Content-Type": "text/plain;charset=utf-8",
-							}
-						});
-					};
-					case `/bestip/${userID_Path}`: {
-						const headers = request.headers;
-						const url = `https://sub.xf.free.hr/auto?host=${request.headers.get('Host')}&uuid=${userID}&path=/`;
-						const bestSubConfig = await fetch(url, { headers: headers });
-						return bestSubConfig;
-					};
-					default:
-						// return new Response('Not found', { status: 404 });
-						// For any other path, reverse proxy to 'ramdom website' and return the original response, caching it in the process
-						const randomHostname = cn_hostnames[Math.floor(Math.random() * cn_hostnames.length)];
-						const newHeaders = new Headers(request.headers);
-						newHeaders.set('cf-connecting-ip', '1.2.3.4');
-						newHeaders.set('x-forwarded-for', '1.2.3.4');
-						newHeaders.set('x-real-ip', '1.2.3.4');
-						newHeaders.set('referer', 'https://www.google.com/search?q=edtunnel');
-						// Use fetch to proxy the request to 15 different domains
-						const proxyUrl = 'https://' + randomHostname + url.pathname + url.search;
-						let modifiedRequest = new Request(proxyUrl, {
-							method: request.method,
-							headers: newHeaders,
-							body: request.body,
-							redirect: 'manual',
-						});
-						const proxyResponse = await fetch(modifiedRequest, { redirect: 'manual' });
-						// Check for 302 or 301 redirect status and return an error response
-						if ([301, 302].includes(proxyResponse.status)) {
-							return new Response(`Redirects to ${randomHostname} are not allowed.`, {
-								status: 403,
-								statusText: 'Forbidden',
-							});
-						}
-						// Return the response from the proxy server
-						return proxyResponse;
-				}
-			} else {
-				return await วเลสOverWSHandler(request);
-			}
-		} catch (err) {
-			/** @type {Error} */ let e = err;
-			return new Response(e.toString());
-		}
-	},
+    async fetch(访问请求, 这个ID) {
+        哎呀呀这是我的ID啊 = 这个ID.UID || 哎呀呀这是我的ID啊;
+        const 读取我的请求标头 = 访问请求.headers.get('Upgrade');
+        if (!读取我的请求标头 || 读取我的请求标头 !== 'websocket') {
+            const url = new URL(访问请求.url);
+            switch (url.pathname) {
+                case `/${哎呀呀这是我的ID啊}`: {
+                    const 订阅页面 = 给我订阅页面(哎呀呀这是我的ID啊, 访问请求.headers.get('Host'));
+                    return new Response(`${订阅页面}`, {
+                        status: 200,
+                        headers: {
+                            "Content-Type": "text/plain;charset=utf-8",
+                        }
+                    });
+                }
+                case `/${哎呀呀这是我的ID啊}/${转码}${转码2}`: {
+                    if (隐藏订阅) {
+                    return new Response (`${嘲讽语}`, { //可以在这里添加你的嘲讽语句，气死个人，哈哈哈
+                    status: 200,
+                    headers: {
+                        "Content-Type": "text/plain;charset=utf-8",
+                        }
+                    });
+                    } else {
+                    const 通用配置文件 = 给我通用配置文件(哎呀呀这是我的ID啊, 访问请求.headers.get('Host'));
+                    return new Response(`${通用配置文件}`, {
+                        status: 200,
+                        headers: {
+                            "Content-Type": "text/plain;charset=utf-8",
+                        }
+                    });
+                  }
+                }
+                case `/${哎呀呀这是我的ID啊}/${小猫}${咪}`: {
+                    if (隐藏订阅) {
+                    return new Response (`${嘲讽语}`, { //可以在这里添加你的嘲讽语句，气死个人，哈哈哈
+                    status: 200,
+                    headers: {
+                        "Content-Type": "text/plain;charset=utf-8",
+                        }
+                    });
+                    } else {
+                    const 小猫咪配置文件 = 给我小猫咪配置文件(哎呀呀这是我的ID啊, 访问请求.headers.get('Host'));
+                    return new Response(`${小猫咪配置文件}`, {
+                        status: 200,
+                        headers: {
+                            "Content-Type": "text/plain;charset=utf-8",
+                        }
+                    });
+                  }
+                }
+                default:
+                    url.hostname = 'www.subtitlecat.com'; //在这里添加伪装域名网站，建议自建的站点，或者国外小站;
+                    url.protocol = 'https:';
+                    访问请求 = new Request(url, 访问请求);
+                    return await fetch(访问请求);
+            }
+        } else {
+            if (私钥开关) {
+            const 验证我的私钥 = 访问请求.headers.get('my-key')
+            if (验证我的私钥 == 咦这是我的私钥哎) {
+            return await 升级WS请求(访问请求);
+            }
+            }
+            if (私钥开关 === false) {
+            return await 升级WS请求(访问请求);
+            }
+        }
+    }
 };
-
-export async function uuid_validator(request) {
-	const hostname = request.headers.get('Host');
-	const currentDate = new Date();
-
-	const subdomain = hostname.split('.')[0];
-	const year = currentDate.getFullYear();
-	const month = String(currentDate.getMonth() + 1).padStart(2, '0');
-	const day = String(currentDate.getDate()).padStart(2, '0');
-
-	const formattedDate = `${year}-${month}-${day}`;
-
-	// const daliy_sub = formattedDate + subdomain
-	const hashHex = await hashHex_f(subdomain);
-	// subdomain string contains timestamps utc and uuid string TODO.
-	console.log(hashHex, subdomain, formattedDate);
+//第一步，读取和构建基础访问结构
+async function 升级WS请求(访问请求) {
+    const 创建WS接口 = new WebSocketPair();
+    const [客户端, WS接口] = Object.values(创建WS接口);
+    WS接口.accept();
+    const 读取我的加密访问内容数据头 = 访问请求.headers.get('sec-websocket-protocol') || '';
+    const 读取解密后的WS数据流 = 创建我的WS服务链接(WS接口, 读取我的加密访问内容数据头);
+    let TCP接口请求 = { value: null, };
+    读取解密后的WS数据流.pipeTo(new WritableStream({
+        async write(VL数据) {
+            if (TCP接口请求.value) {
+                const 传输数据 = TCP接口请求.value.writable.getWriter()
+                await 传输数据.write(VL数据);
+                传输数据.releaseLock();
+                return;
+            }
+            const {
+                访问地址 = '',
+                访问端口 = '',
+                创建原始数据索引,
+                VL版本 = new Uint8Array([0, 0]),
+            } = await VL进程标头(VL数据);
+            const VL请求标头 = new Uint8Array([VL版本[0], VL版本[1]]);
+            const 写入数据请求 = VL数据.slice(创建原始数据索引);
+            TCP握手协议(TCP接口请求, 访问地址, 访问端口, 写入数据请求, WS接口, VL请求标头);
+        },
+    }));
+    return new Response(null, {
+        status: 101,
+        webSocket: 客户端,
+    });
 }
-
-export async function hashHex_f(string) {
-	const encoder = new TextEncoder();
-	const data = encoder.encode(string);
-	const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-	const hashArray = Array.from(new Uint8Array(hashBuffer));
-	const hashHex = hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
-	return hashHex;
+//第二步，解密WS访问内容，建立WS服务监听状态
+function 创建我的WS服务链接(WS服务, 解密我的访问数据) {
+  	const 数据流 = new ReadableStream({
+  	  	start(控制器) {
+  	  	  	WS服务.addEventListener('message', (event) => {
+  	  	  	    const message = event.data
+  	  	  	    控制器.enqueue(message)
+  	  	  	});
+  	  	  	WS服务.addEventListener('close', () => {
+                检查WS状态并关闭控制器(WS服务, 控制器)
+  	  	  	});
+  	  	  	const {earlyData} = 使用64位加解密(解密我的访问数据);
+  	  	  	if (earlyData) { 控制器.enqueue(earlyData); };
+  	  	}
+  	});
+  	return 数据流;
 }
-
-/**
- * Handles วเลส over WebSocket requests by creating a WebSocket pair, accepting the WebSocket connection, and processing the วเลส header.
- * @param {import("@cloudflare/workers-types").Request} request The incoming request object.
- * @returns {Promise<Response>} A Promise that resolves to a WebSocket response object.
- */
-async function วเลสOverWSHandler(request) {
-	const webSocketPair = new WebSocketPair();
-	const [client, webSocket] = Object.values(webSocketPair);
-	webSocket.accept();
-
-	let address = '';
-	let portWithRandomLog = '';
-	let currentDate = new Date();
-	const log = (/** @type {string} */ info, /** @type {string | undefined} */ event) => {
-		console.log(`[${currentDate} ${address}:${portWithRandomLog}] ${info}`, event || '');
-	};
-	const earlyDataHeader = request.headers.get('sec-websocket-protocol') || '';
-
-	const readableWebSocketStream = makeReadableWebSocketStream(webSocket, earlyDataHeader, log);
-
-	/** @type {{ value: import("@cloudflare/workers-types").Socket | null}}*/
-	let remoteSocketWapper = {
-		value: null,
-	};
-	let udpStreamWrite = null;
-	let isDns = false;
-
-	// ws --> remote
-	readableWebSocketStream.pipeTo(new WritableStream({
-		async write(chunk, controller) {
-			if (isDns && udpStreamWrite) {
-				return udpStreamWrite(chunk);
-			}
-			if (remoteSocketWapper.value) {
-				const writer = remoteSocketWapper.value.writable.getWriter()
-				await writer.write(chunk);
-				writer.releaseLock();
-				return;
-			}
-
-			const {
-				hasError,
-				message,
-				portRemote = 443,
-				addressRemote = '',
-				rawDataIndex,
-				วเลสVersion = new Uint8Array([0, 0]),
-				isUDP,
-			} = processวเลสHeader(chunk, userID);
-			address = addressRemote;
-			portWithRandomLog = `${portRemote} ${isUDP ? 'udp' : 'tcp'} `;
-			if (hasError) {
-				// controller.error(message);
-				throw new Error(message); // cf seems has bug, controller.error will not end stream
-			}
-
-			// If UDP and not DNS port, close it
-			if (isUDP && portRemote !== 53) {
-				throw new Error('UDP proxy only enabled for DNS which is port 53');
-				// cf seems has bug, controller.error will not end stream
-			}
-
-			if (isUDP && portRemote === 53) {
-				isDns = true;
-			}
-
-			// ["version", "附加信息长度 N"]
-			const วเลสResponseHeader = new Uint8Array([วเลสVersion[0], 0]);
-			const rawClientData = chunk.slice(rawDataIndex);
-
-			// TODO: support udp here when cf runtime has udp support
-			if (isDns) {
-				const { write } = await handleUDPOutBound(webSocket, วเลสResponseHeader, log);
-				udpStreamWrite = write;
-				udpStreamWrite(rawClientData);
-				return;
-			}
-			handleTCPOutBound(remoteSocketWapper, addressRemote, portRemote, rawClientData, webSocket, วเลสResponseHeader, log);
-		},
-		close() {
-			log(`readableWebSocketStream is close`);
-		},
-		abort(reason) {
-			log(`readableWebSocketStream is abort`, JSON.stringify(reason));
-		},
-	})).catch((err) => {
-		log('readableWebSocketStream pipeTo error', err);
-	});
-
-	return new Response(null, {
-		status: 101,
-		webSocket: client,
-	});
+async function 检查WS状态并关闭控制器(WS服务, 控制器, 初始次数 = 0, 最大尝试次数 = 2, 等待延迟 = 50) {
+  while (WS服务.readyState !== 3 && 初始次数 < 最大尝试次数) {
+      await new Promise(resolve => setTimeout(resolve, 等待延迟));
+      初始次数++;
+  }
+  if (WS服务.readyState !== 3) {
+      WS服务.close();
+  }
+  控制器.close();
 }
-
-/**
- * Handles outbound TCP connections.
- *
- * @param {any} remoteSocket 
- * @param {string} addressRemote The remote address to connect to.
- * @param {number} portRemote The remote port to connect to.
- * @param {Uint8Array} rawClientData The raw client data to write.
- * @param {import("@cloudflare/workers-types").WebSocket} webSocket The WebSocket to pass the remote socket to.
- * @param {Uint8Array} วเลสResponseHeader The วเลส response header.
- * @param {function} log The logging function.
- * @returns {Promise<void>} The remote socket.
- */
-async function handleTCPOutBound(remoteSocket, addressRemote, portRemote, rawClientData, webSocket, วเลสResponseHeader, log,) {
-
-	/**
-	 * Connects to a given address and port and writes data to the socket.
-	 * @param {string} address The address to connect to.
-	 * @param {number} port The port to connect to.
-	 * @returns {Promise<import("@cloudflare/workers-types").Socket>} A Promise that resolves to the connected socket.
-	 */
-	async function connectAndWrite(address, port) {
-		/** @type {import("@cloudflare/workers-types").Socket} */
-		const tcpSocket = connect({
-			hostname: address,
-			port: port,
-		});
-		remoteSocket.value = tcpSocket;
-		log(`connected to ${address}:${port}`);
-		const writer = tcpSocket.writable.getWriter();
-		await writer.write(rawClientData); // first write, nomal is tls client hello
-		writer.releaseLock();
-		return tcpSocket;
-	}
-
-	/**
-	 * Retries connecting to the remote address and port if the Cloudflare socket has no incoming data.
-	 * @returns {Promise<void>} A Promise that resolves when the retry is complete.
-	 */
-	async function retry() {
-		const tcpSocket = await connectAndWrite(พร็อกซีไอพี || addressRemote, portRemote)
-		tcpSocket.closed.catch(error => {
-			console.log('retry tcpSocket closed error', error);
-		}).finally(() => {
-			safeCloseWebSocket(webSocket);
-		})
-		remoteSocketToWS(tcpSocket, webSocket, วเลสResponseHeader, null, log);
-	}
-
-	const tcpSocket = await connectAndWrite(addressRemote, portRemote);
-
-	// when remoteSocket is ready, pass to websocket
-	// remote--> ws
-	remoteSocketToWS(tcpSocket, webSocket, วเลสResponseHeader, retry, log);
+function 使用64位加解密(还原混淆字符) {
+  还原混淆字符 = 还原混淆字符.replace(/-/g, '+').replace(/_/g, '/');
+  const 解密数据 = atob(还原混淆字符);
+  const 解密_你_个_丁咚_咙_咚呛 = Uint8Array.from(解密数据, (c) => c.charCodeAt(0));
+  return { earlyData: 解密_你_个_丁咚_咙_咚呛.buffer };
 }
-
-/**
- * Creates a readable stream from a WebSocket server, allowing for data to be read from the WebSocket.
- * @param {import("@cloudflare/workers-types").WebSocket} webSocketServer The WebSocket server to create the readable stream from.
- * @param {string} earlyDataHeader The header containing early data for WebSocket 0-RTT.
- * @param {(info: string)=> void} log The logging function.
- * @returns {ReadableStream} A readable stream that can be used to read data from the WebSocket.
- */
-function makeReadableWebSocketStream(webSocketServer, earlyDataHeader, log) {
-	let readableStreamCancel = false;
-	const stream = new ReadableStream({
-		start(controller) {
-			webSocketServer.addEventListener('message', (event) => {
-				const message = event.data;
-				controller.enqueue(message);
-			});
-
-			webSocketServer.addEventListener('close', () => {
-				safeCloseWebSocket(webSocketServer);
-				controller.close();
-			});
-
-			webSocketServer.addEventListener('error', (err) => {
-				log('webSocketServer has error');
-				controller.error(err);
-			});
-			const { earlyData, error } = base64ToArrayBuffer(earlyDataHeader);
-			if (error) {
-				controller.error(error);
-			} else if (earlyData) {
-				controller.enqueue(earlyData);
-			}
-		},
-
-		pull(controller) {
-			// if ws can stop read if stream is full, we can implement backpressure
-			// https://streams.spec.whatwg.org/#example-rs-push-backpressure
-		},
-
-		cancel(reason) {
-			log(`ReadableStream was canceled, due to ${reason}`)
-			readableStreamCancel = true;
-			safeCloseWebSocket(webSocketServer);
-		}
-	});
-
-	return stream;
+//第三步，解读VL协议数据，建立客户端VL--workers的完整索引通道
+async function VL进程标头(VL缓存) {
+  	const VL头部数据 = new Uint8Array(VL缓存.slice(0, 1));
+  	const 获取数据定位 = new Uint8Array(VL缓存.slice(17, 18))[0];
+  	const 提取端口索引 = 18 + 获取数据定位 + 1;
+  	const 建立端口缓存 = VL缓存.slice(提取端口索引, 提取端口索引 + 2);
+  	const 访问端口 = new DataView(建立端口缓存).getUint16(0);
+  	const 提取地址索引 = 提取端口索引 + 2;
+  	const 建立地址缓存 = new Uint8Array(VL缓存.slice(提取地址索引, 提取地址索引 + 1));
+  	const 识别地址类型 = 建立地址缓存[0];
+  	let 地址长度 = 0;
+  	let 地址信息 = '';
+  	let 地址信息索引 = 提取地址索引 + 1;
+  	switch (识别地址类型) {
+  	  	case 1:
+  	  	    地址长度 = 4;
+  	  	    地址信息 = new Uint8Array(
+  	  	        VL缓存.slice(地址信息索引, 地址信息索引 + 地址长度)
+  	  	    ).join('.');
+  	  	    break;
+  	  	case 2:
+  	  	    地址长度 = new Uint8Array(
+  	  	        VL缓存.slice(地址信息索引, 地址信息索引 + 1)
+  	  	    )[0];
+  	  	    地址信息索引 += 1;
+  	  	    地址信息 = new TextDecoder().decode(
+  	  	        VL缓存.slice(地址信息索引, 地址信息索引 + 地址长度)
+  	  	    );
+  	  	    break;
+  	  	case 3:
+  	  	    地址长度 = 16;
+  	  	    const dataView = new DataView(
+  	  	        VL缓存.slice(地址信息索引, 地址信息索引 + 地址长度)
+  	  	    );
+  	  	    const ipv6 = [];
+  	  	    for (let i = 0; i < 8; i++) {
+  	  	        ipv6.push(dataView.getUint16(i * 2).toString(16));
+  	  	    }
+  	  	    地址信息 = ipv6.join(':');
+  	  	    break;
+  	} 	
+  	return {
+  	  	访问地址: 地址信息,
+  	  	识别地址类型,
+  	  	访问端口,
+  	  	创建原始数据索引: 地址信息索引 + 地址长度,
+  	  	VL版本: VL头部数据,
+  	};
 }
-
-// https://xtls.github.io/development/protocols/วเลส.html
-// https://github.com/zizifn/excalidraw-backup/blob/main/v2ray-protocol.excalidraw
-
-/**
- * Processes the วเลส header buffer and returns an object with the relevant information.
- * @param {ArrayBuffer} วเลสBuffer The วเลส header buffer to process.
- * @param {string} userID The user ID to validate against the UUID in the วเลส header.
- * @returns {{
- *  hasError: boolean,
- *  message?: string,
- *  addressRemote?: string,
- *  addressType?: number,
- *  portRemote?: number,
- *  rawDataIndex?: number,
- *  วเลสVersion?: Uint8Array,
- *  isUDP?: boolean
- * }} An object with the relevant information extracted from the วเลส header buffer.
- */
-function processวเลสHeader(วเลสBuffer, userID) {
-	if (วเลสBuffer.byteLength < 24) {
-		return {
-			hasError: true,
-			message: 'invalid data',
-		};
-	}
-
-	const version = new Uint8Array(วเลสBuffer.slice(0, 1));
-	let isValidUser = false;
-	let isUDP = false;
-	const slicedBuffer = new Uint8Array(วเลสBuffer.slice(1, 17));
-	const slicedBufferString = stringify(slicedBuffer);
-	// check if userID is valid uuid or uuids split by , and contains userID in it otherwise return error message to console
-	const uuids = userID.includes(',') ? userID.split(",") : [userID];
-	// uuid_validator(hostName, slicedBufferString);
-
-
-	// isValidUser = uuids.some(userUuid => slicedBufferString === userUuid.trim());
-	isValidUser = uuids.some(userUuid => slicedBufferString === userUuid.trim()) || uuids.length === 1 && slicedBufferString === uuids[0].trim();
-
-	console.log(`userID: ${slicedBufferString}`);
-
-	if (!isValidUser) {
-		return {
-			hasError: true,
-			message: 'invalid user',
-		};
-	}
-
-	const optLength = new Uint8Array(วเลสBuffer.slice(17, 18))[0];
-	//skip opt for now
-
-	const command = new Uint8Array(
-		วเลสBuffer.slice(18 + optLength, 18 + optLength + 1)
-	)[0];
-
-	// 0x01 TCP
-	// 0x02 UDP
-	// 0x03 MUX
-	if (command === 1) {
-		isUDP = false;
-	} else if (command === 2) {
-		isUDP = true;
-	} else {
-		return {
-			hasError: true,
-			message: `command ${command} is not support, command 01-tcp,02-udp,03-mux`,
-		};
-	}
-	const portIndex = 18 + optLength + 1;
-	const portBuffer = วเลสBuffer.slice(portIndex, portIndex + 2);
-	// port is big-Endian in raw data etc 80 == 0x005d
-	const portRemote = new DataView(portBuffer).getUint16(0);
-
-	let addressIndex = portIndex + 2;
-	const addressBuffer = new Uint8Array(
-		วเลสBuffer.slice(addressIndex, addressIndex + 1)
-	);
-
-	// 1--> ipv4  addressLength =4
-	// 2--> domain name addressLength=addressBuffer[1]
-	// 3--> ipv6  addressLength =16
-	const addressType = addressBuffer[0];
-	let addressLength = 0;
-	let addressValueIndex = addressIndex + 1;
-	let addressValue = '';
-	switch (addressType) {
-		case 1:
-			addressLength = 4;
-			addressValue = new Uint8Array(
-				วเลสBuffer.slice(addressValueIndex, addressValueIndex + addressLength)
-			).join('.');
-			break;
-		case 2:
-			addressLength = new Uint8Array(
-				วเลสBuffer.slice(addressValueIndex, addressValueIndex + 1)
-			)[0];
-			addressValueIndex += 1;
-			addressValue = new TextDecoder().decode(
-				วเลสBuffer.slice(addressValueIndex, addressValueIndex + addressLength)
-			);
-			break;
-		case 3:
-			addressLength = 16;
-			const dataView = new DataView(
-				วเลสBuffer.slice(addressValueIndex, addressValueIndex + addressLength)
-			);
-			// 2001:0db8:85a3:0000:0000:8a2e:0370:7334
-			const ipv6 = [];
-			for (let i = 0; i < 8; i++) {
-				ipv6.push(dataView.getUint16(i * 2).toString(16));
-			}
-			addressValue = ipv6.join(':');
-			// seems no need add [] for ipv6
-			break;
-		default:
-			return {
-				hasError: true,
-				message: `invild  addressType is ${addressType}`,
-			};
-	}
-	if (!addressValue) {
-		return {
-			hasError: true,
-			message: `addressValue is empty, addressType is ${addressType}`,
-		};
-	}
-
-	return {
-		hasError: false,
-		addressRemote: addressValue,
-		addressType,
-		portRemote,
-		rawDataIndex: addressValueIndex + addressLength,
-		วเลสVersion: version,
-		isUDP,
-	};
+//第四步，建立VL--workers--外网的TCP握手协议
+async function TCP握手协议(TCP接口请求, 访问地址, 访问端口, 写入数据请求, WS接口, VL返回标头) {
+  	async function 连接写入请求(地址, 端口) {
+  	    const tcp接口 = connect({ hostname: 地址, port: 端口, });
+  	    TCP接口请求.value = tcp接口;
+  	    const 传输数据 = tcp接口.writable.getWriter();
+  	    await 传输数据.write(写入数据请求);
+  	    传输数据.releaseLock();
+  	    return tcp接口;
+  	}
+  	async function 反代兜底() {
+  	    const tcp接口 = await 连接写入请求(反代IP, 访问端口) //反代兜底功能，实现逻辑是客户端访问地址--反代IP--实际外网访问地址，并以同样的通道返回数据
+  	    TCP接口访问WS(tcp接口, WS接口, VL返回标头);
+  	}
+  	    const tcp接口 = await 连接写入请求(访问地址, 访问端口);
+  	    TCP接口访问WS(tcp接口, WS接口, VL返回标头, 反代兜底);
 }
-
-
-/**
- * Converts a remote socket to a WebSocket connection.
- * @param {import("@cloudflare/workers-types").Socket} remoteSocket The remote socket to convert.
- * @param {import("@cloudflare/workers-types").WebSocket} webSocket The WebSocket to connect to.
- * @param {ArrayBuffer | null} วเลสResponseHeader The วเลส response header.
- * @param {(() => Promise<void>) | null} retry The function to retry the connection if it fails.
- * @param {(info: string) => void} log The logging function.
- * @returns {Promise<void>} A Promise that resolves when the conversion is complete.
- */
-async function remoteSocketToWS(remoteSocket, webSocket, วเลสResponseHeader, retry, log) {
-	// remote--> ws
-	let remoteChunkCount = 0;
-	let chunks = [];
-	/** @type {ArrayBuffer | null} */
-	let วเลสHeader = วเลสResponseHeader;
-	let hasIncomingData = false; // check if remoteSocket has incoming data
-	await remoteSocket.readable
-		.pipeTo(
-			new WritableStream({
-				start() {
-				},
-				/**
-				 * 
-				 * @param {Uint8Array} chunk 
-				 * @param {*} controller 
-				 */
-				async write(chunk, controller) {
-					hasIncomingData = true;
-					remoteChunkCount++;
-					if (webSocket.readyState !== WS_READY_STATE_OPEN) {
-						controller.error(
-							'webSocket.readyState is not open, maybe close'
-						);
-					}
-					if (วเลสHeader) {
-						webSocket.send(await new Blob([วเลสHeader, chunk]).arrayBuffer());
-						วเลสHeader = null;
-					} else {
-						// console.log(`remoteSocketToWS send chunk ${chunk.byteLength}`);
-						// seems no need rate limit this, CF seems fix this??..
-						// if (remoteChunkCount > 20000) {
-						// 	// cf one package is 4096 byte(4kb),  4096 * 20000 = 80M
-						// 	await delay(1);
-						// }
-						webSocket.send(chunk);
-					}
-				},
-				close() {
-					log(`remoteConnection!.readable is close with hasIncomingData is ${hasIncomingData}`);
-					// safeCloseWebSocket(webSocket); // no need server close websocket frist for some case will casue HTTP ERR_CONTENT_LENGTH_MISMATCH issue, client will send close event anyway.
-				},
-				abort(reason) {
-					console.error(`remoteConnection!.readable abort`, reason);
-				},
-			})
-		)
-		.catch((error) => {
-			console.error(
-				`remoteSocketToWS has exception `,
-				error.stack || error
-			);
-			safeCloseWebSocket(webSocket);
-		});
-
-	// seems is cf connect socket have error,
-	// 1. Socket.closed will have error
-	// 2. Socket.readable will be close without any data coming
-	if (hasIncomingData === false && retry) {
-		log(`retry`)
-		retry();
-	}
+//第五步，进行VL--workers--外网的WS数据传输，TCP握手成功后建立最终的WS数据传输通道
+async function TCP接口访问WS(TCP远程接口, WS接口, VL报告标头, 重试使用反代兜底访问) {
+  	let VL标头 = VL报告标头;
+  	let 传入数据 = false;
+  	await TCP远程接口.readable.pipeTo(new WritableStream({ 
+  	  	  	async write(VL数据块) {
+  	  	  	    传入数据 = true;
+  	  	  	    if (VL标头) {
+  	  	  	        WS接口.send(await new Blob([VL标头, VL数据块]).arrayBuffer());
+  	  	  	        VL标头 = null;
+  	  	  	    } else {
+  	  	  	        WS接口.send(VL数据块);
+  	  	  	    }
+  	  	  	},
+  	  	})
+  	);
+  	if (启用反代功能) {
+  	    if (传入数据 == false && 重试使用反代兜底访问) { //当使用默认节点无法接收到返回数据时，启用反代兜底逻辑重试访问
+  	        重试使用反代兜底访问();
+  	    }
+  	}
 }
-
-/**
- * Decodes a base64 string into an ArrayBuffer.
- * @param {string} base64Str The base64 string to decode.
- * @returns {{earlyData: ArrayBuffer|null, error: Error|null}} An object containing the decoded ArrayBuffer or null if there was an error, and any error that occurred during decoding or null if there was no error.
- */
-function base64ToArrayBuffer(base64Str) {
-	if (!base64Str) {
-		return { earlyData: null, error: null };
-	}
-	try {
-		// go use modified Base64 for URL rfc4648 which js atob not support
-		base64Str = base64Str.replace(/-/g, '+').replace(/_/g, '/');
-		const decode = atob(base64Str);
-		const arryBuffer = Uint8Array.from(decode, (c) => c.charCodeAt(0));
-		return { earlyData: arryBuffer.buffer, error: null };
-	} catch (error) {
-		return { earlyData: null, error };
-	}
+//小猫咪配置文件
+function 给我订阅页面(哎呀呀这是我的ID啊, hostName) {
+return `
+1、本worker的私钥功能只支持${小猫}${咪}，仅open${小猫}${咪}和${小猫}${咪} meta测试过，其他clash类软件自行测试
+2、若使用通用订阅请关闭私钥功能
+3、其他需求自行研究
+通用的：https://${hostName}/${哎呀呀这是我的ID啊}/${转码}${转码2}
+猫咪的：https${符号}${hostName}/${哎呀呀这是我的ID啊}/${小猫}${咪}
+`;
 }
-
-/**
- * Checks if a given string is a valid UUID.
- * Note: This is not a real UUID validation.
- * @param {string} uuid The string to validate as a UUID.
- * @returns {boolean} True if the string is a valid UUID, false otherwise.
- */
-function isValidUUID(uuid) {
-	const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[4][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-	return uuidRegex.test(uuid);
+function 给我通用配置文件(哎呀呀这是我的ID啊, hostName) {
+  const 特殊长链接Links = btoa(`${转码}${转码2}${符号}${哎呀呀这是我的虚假UUID}@${特殊优选}:${特殊优选的端口}?encryption=none&security=tls&sni=${hostName}&type=ws&host=${hostName}&path=%2F%3Fed%3D2560`);
+  return `${特殊长链接Links}`
 }
-
-const WS_READY_STATE_OPEN = 1;
-const WS_READY_STATE_CLOSING = 2;
-/**
- * Closes a WebSocket connection safely without throwing exceptions.
- * @param {import("@cloudflare/workers-types").WebSocket} socket The WebSocket connection to close.
- */
-function safeCloseWebSocket(socket) {
-	try {
-		if (socket.readyState === WS_READY_STATE_OPEN || socket.readyState === WS_READY_STATE_CLOSING) {
-			socket.close();
-		}
-	} catch (error) {
-		console.error('safeCloseWebSocket error', error);
-	}
+function 给我小猫咪配置文件(哎呀呀这是我的ID啊, hostName) {
+return `
+dns:
+  nameserver:
+    - 119.29.29.29
+    - 223.5.5.5
+  fallback:
+    - 8.8.8.8
+    - tls://dns.google
+    - 2001:4860:4860::8888
+proxies:
+- name: ${我的节点名字}-非CF节点
+  type: ${转码}${转码2}
+  server: ${特殊优选}
+  port: ${特殊优选的端口}
+  uuid: ${哎呀呀这是我的虚假UUID}
+  udp: false
+  tls: ${非CF节点是否打开tls}
+  network: ws
+  ws-opts:
+    path: "${回落路径}"
+    headers:
+      Host: ${hostName}
+      my-key: ${咦这是我的私钥哎}
+proxy-groups:
+- name: 🚀 节点选择
+  type: select
+  proxies:
+    - notls负载均衡
+    - tls负载均衡
+    - 自动选择
+    - ${我的节点名字}-非CF节点
+- name: 自动选择
+  type: url-test
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  tolerance: 50
+  proxies:
+    - ${我的节点名字}-非CF节点
+- name: notls负载均衡
+  type: load-balance
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  proxies:
+- name: tls负载均衡
+  type: load-balance
+  url: http://www.gstatic.com/generate_204
+  interval: 300
+  proxies:
+- name: 非CF节点
+  type: select
+  proxies:
+    - ${我的节点名字}-非CF节点
+- name: 漏网之鱼
+  type: select
+  proxies:
+    - DIRECT
+    - 🚀 节点选择
+    - 非CF节点
+rules:
+# 策略规则，部分规则需打开clash mate的使用geoip dat版数据库，比如TG规则就需要，或者自定义geoip的规则订阅
+# 这是geoip的规则订阅链接，https://cdn.jsdelivr.net/gh/Loyalsoldier/geoip@release/Country.mmdb
+# GPT规则
+- DOMAIN-KEYWORD,openai,🚀 节点选择
+- DOMAIN-SUFFIX,AI.com,🚀 节点选择
+- DOMAIN-SUFFIX,cdn.auth0.com,🚀 节点选择
+- DOMAIN-SUFFIX,openaiapi-site.azureedge.net,🚀 节点选择
+- DOMAIN-SUFFIX,opendns.com,🚀 节点选择
+- DOMAIN-SUFFIX,bing.com,🚀 节点选择
+- DOMAIN-SUFFIX,civitai.com,🚀 节点选择
+- DOMAIN,bard.google.com,🚀 节点选择
+- DOMAIN,ai.google.dev,🚀 节点选择
+- DOMAIN,gemini.google.com,🚀 节点选择
+- DOMAIN-SUFFIX,googleapis.com,🚀 节点选择
+- DOMAIN-SUFFIX,sentry.io,🚀 节点选择
+- DOMAIN-SUFFIX,intercom.io,🚀 节点选择
+- DOMAIN-SUFFIX,featuregates.org,🚀 节点选择
+- DOMAIN-SUFFIX,statsigapi.net,🚀 节点选择
+- DOMAIN-SUFFIX,claude.ai,🚀 节点选择
+- DOMAIN-SUFFIX,Anthropic.com,🚀 节点选择
+- DOMAIN-SUFFIX,opera-api.com,🚀 节点选择
+- DOMAIN-SUFFIX,aistudio.google.com,🚀 节点选择
+- DOMAIN-SUFFIX,auth0.com,🚀 节点选择
+- DOMAIN-SUFFIX,challenges.cloudflare.com,🚀 节点选择
+- DOMAIN-SUFFIX,chatgpt.com,🚀 节点选择
+- DOMAIN-SUFFIX,client-api.arkoselabs.com,🚀 节点选择
+- DOMAIN-SUFFIX,events.statsigapi.net,🚀 节点选择
+- DOMAIN-SUFFIX,identrust.com,🚀 节点选择
+- DOMAIN-SUFFIX,intercomcdn.com,🚀 节点选择
+- DOMAIN-SUFFIX,oaistatic.com,🚀 节点选择
+- DOMAIN-SUFFIX,oaiusercontent.com,🚀 节点选择
+- DOMAIN-SUFFIX,openai.com,🚀 节点选择
+- DOMAIN-SUFFIX,stripe.com,🚀 节点选择
+# GPT规则
+- GEOSITE,category-ads,REJECT #简单广告过滤规则，要增加规则数可使用category-ads-all
+- GEOSITE,cn,DIRECT #国内域名直连规则
+- GEOIP,CN,DIRECT,no-resolve #国内IP直连规则
+- GEOSITE,cloudflare,DIRECT #CF域名直连规则
+- GEOIP,CLOUDFLARE,DIRECT,no-resolve #CFIP直连规则
+- GEOSITE,gfw,🚀 节点选择 #GFW域名规则
+- GEOSITE,google,🚀 节点选择 #GOOGLE域名规则
+- GEOIP,GOOGLE,🚀 节点选择,no-resolve #GOOGLE IP规则
+- GEOSITE,netflix,🚀 节点选择 #奈飞域名规则
+- GEOIP,NETFLIX,🚀 节点选择,no-resolve #奈飞IP规则
+- GEOSITE,telegram,🚀 节点选择 #TG域名规则
+- GEOIP,TELEGRAM,🚀 节点选择,no-resolve #TG IP规则
+- MATCH,漏网之鱼
+`
 }
-
-const byteToHex = [];
-
-for (let i = 0; i < 256; ++i) {
-	byteToHex.push((i + 256).toString(16).slice(1));
-}
-
-function unsafeStringify(arr, offset = 0) {
-	return (byteToHex[arr[offset + 0]] + byteToHex[arr[offset + 1]] + byteToHex[arr[offset + 2]] + byteToHex[arr[offset + 3]] + "-" + byteToHex[arr[offset + 4]] + byteToHex[arr[offset + 5]] + "-" + byteToHex[arr[offset + 6]] + byteToHex[arr[offset + 7]] + "-" + byteToHex[arr[offset + 8]] + byteToHex[arr[offset + 9]] + "-" + byteToHex[arr[offset + 10]] + byteToHex[arr[offset + 11]] + byteToHex[arr[offset + 12]] + byteToHex[arr[offset + 13]] + byteToHex[arr[offset + 14]] + byteToHex[arr[offset + 15]]).toLowerCase();
-}
-
-function stringify(arr, offset = 0) {
-	const uuid = unsafeStringify(arr, offset);
-	if (!isValidUUID(uuid)) {
-		throw TypeError("Stringified UUID is invalid");
-	}
-	return uuid;
-}
-
-
-/**
- * Handles outbound UDP traffic by transforming the data into DNS queries and sending them over a WebSocket connection.
- * @param {import("@cloudflare/workers-types").WebSocket} webSocket The WebSocket connection to send the DNS queries over.
- * @param {ArrayBuffer} วเลสResponseHeader The วเลส response header.
- * @param {(string) => void} log The logging function.
- * @returns {{write: (chunk: Uint8Array) => void}} An object with a write method that accepts a Uint8Array chunk to write to the transform stream.
- */
-async function handleUDPOutBound(webSocket, วเลสResponseHeader, log) {
-
-	let isวเลสHeaderSent = false;
-	const transformStream = new TransformStream({
-		start(controller) {
-
-		},
-		transform(chunk, controller) {
-			// udp message 2 byte is the the length of udp data
-			// TODO: this should have bug, beacsue maybe udp chunk can be in two websocket message
-			for (let index = 0; index < chunk.byteLength;) {
-				const lengthBuffer = chunk.slice(index, index + 2);
-				const udpPakcetLength = new DataView(lengthBuffer).getUint16(0);
-				const udpData = new Uint8Array(
-					chunk.slice(index + 2, index + 2 + udpPakcetLength)
-				);
-				index = index + 2 + udpPakcetLength;
-				controller.enqueue(udpData);
-			}
-		},
-		flush(controller) {
-		}
-	});
-
-	// only handle dns udp for now
-	transformStream.readable.pipeTo(new WritableStream({
-		async write(chunk) {
-			const resp = await fetch(dohURL, // dns server url
-				{
-					method: 'POST',
-					headers: {
-						'content-type': 'application/dns-message',
-					},
-					body: chunk,
-				})
-			const dnsQueryResult = await resp.arrayBuffer();
-			const udpSize = dnsQueryResult.byteLength;
-			// console.log([...new Uint8Array(dnsQueryResult)].map((x) => x.toString(16)));
-			const udpSizeBuffer = new Uint8Array([(udpSize >> 8) & 0xff, udpSize & 0xff]);
-			if (webSocket.readyState === WS_READY_STATE_OPEN) {
-				log(`doh success and dns message length is ${udpSize}`);
-				if (isวเลสHeaderSent) {
-					webSocket.send(await new Blob([udpSizeBuffer, dnsQueryResult]).arrayBuffer());
-				} else {
-					webSocket.send(await new Blob([วเลสResponseHeader, udpSizeBuffer, dnsQueryResult]).arrayBuffer());
-					isวเลสHeaderSent = true;
-				}
-			}
-		}
-	})).catch((error) => {
-		log('dns udp has error' + error)
-	});
-
-	const writer = transformStream.writable.getWriter();
-
-	return {
-		/**
-		 * 
-		 * @param {Uint8Array} chunk 
-		 */
-		write(chunk) {
-			writer.write(chunk);
-		}
-	};
-}
-
-const at = 'QA==';
-const pt = 'dmxlc3M=';
-const ed = 'RUR0dW5uZWw=';
-/**
- *
- * @param {string} userID - single or comma separated userIDs
- * @param {string | null} hostName
- * @returns {string}
- */
-function getวเลสConfig(userIDs, hostName) {
-	const commonUrlPart = `:443?encryption=none&security=tls&sni=${hostName}&fp=randomized&type=ws&host=${hostName}&path=%2F%3Fed%3D2048#${hostName}`;
-	const hashSeparator = "################################################################";
-
-	// Split the userIDs into an array
-	const userIDArray = userIDs.split(",");
-
-	// Prepare output string for each userID
-	const output = userIDArray.map((userID) => {
-		const วเลสMain = atob(pt) + '://' + userID + atob(at) + hostName + commonUrlPart;
-		const วเลสSec = atob(pt) + '://' + userID + atob(at) + พร็อกซีไอพี + commonUrlPart;
-		return `<h2>UUID: ${userID}</h2>${hashSeparator}\nv2ray default ip
----------------------------------------------------------------
-${วเลสMain}
-<button onclick='copyToClipboard("${วเลสMain}")'><i class="fa fa-clipboard"></i> Copy วเลสMain</button>
----------------------------------------------------------------
-v2ray with bestip
----------------------------------------------------------------
-${วเลสSec}
-<button onclick='copyToClipboard("${วเลสSec}")'><i class="fa fa-clipboard"></i> Copy วเลสSec</button>
----------------------------------------------------------------`;
-	}).join('\n');
-	const sublink = `https://${hostName}/sub/${userIDArray[0]}?format=clash`
-	const subbestip = `https://${hostName}/bestip/${userIDArray[0]}`;
-	const clash_link = `https://api.v1.mk/sub?target=clash&url=${encodeURIComponent(sublink)}&insert=false&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&new_name=true`;
-	// Prepare header string
-	const header = `
-<p align='center'><img src='https://cloudflare-ipfs.com/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky' alt='图片描述' style='margin-bottom: -50px;'>
-<b style='font-size: 15px;'>Welcome! This function generates configuration for วเลส protocol. If you found this useful, please check our GitHub project for more:</b>
-<b style='font-size: 15px;'>欢迎！这是生成 วเลส 协议的配置。如果您发现这个项目很好用，请查看我们的 GitHub 项目给我一个star：</b>
-<a href='https://github.com/3Kmfi6HP/EDtunnel' target='_blank'>EDtunnel - https://github.com/3Kmfi6HP/EDtunnel</a>
-<iframe src='https://ghbtns.com/github-btn.html?user=USERNAME&repo=REPOSITORY&type=star&count=true&size=large' frameborder='0' scrolling='0' width='170' height='30' title='GitHub'></iframe>
-<a href='//${hostName}/sub/${userIDArray[0]}' target='_blank'>วเลส 节点订阅连接</a>
-<a href='clash://install-config?url=${encodeURIComponent(`https://${hostName}/sub/${userIDArray[0]}?format=clash`)}}' target='_blank'>Clash for Windows 节点订阅连接</a>
-<a href='${clash_link}' target='_blank'>Clash 节点订阅连接</a>
-<a href='${subbestip}' target='_blank'>优选IP自动节点订阅</a>
-<a href='clash://install-config?url=${encodeURIComponent(subbestip)}' target='_blank'>Clash优选IP自动</a>
-<a href='sing-box://import-remote-profile?url=${encodeURIComponent(subbestip)}' target='_blank'>singbox优选IP自动</a>
-<a href='sn://subscription?url=${encodeURIComponent(subbestip)}' target='_blank'>nekobox优选IP自动</a>
-<a href='v2rayng://install-config?url=${encodeURIComponent(subbestip)}' target='_blank'>v2rayNG优选IP自动</a></p>`;
-
-	// HTML Head with CSS and FontAwesome library
-	const htmlHead = `
-  <head>
-	<title>EDtunnel: วเลส configuration</title>
-	<meta name='description' content='This is a tool for generating วเลส protocol configurations. Give us a star on GitHub https://github.com/3Kmfi6HP/EDtunnel if you found it useful!'>
-	<meta name='keywords' content='EDtunnel, cloudflare pages, cloudflare worker, severless'>
-	<meta name='viewport' content='width=device-width, initial-scale=1'>
-	<meta property='og:site_name' content='EDtunnel: วเลส configuration' />
-	<meta property='og:type' content='website' />
-	<meta property='og:title' content='EDtunnel - วเลส configuration and subscribe output' />
-	<meta property='og:description' content='Use cloudflare pages and worker severless to implement วเลส protocol' />
-	<meta property='og:url' content='https://${hostName}/' />
-	<meta property='og:image' content='https://api.qrserver.com/v1/create-qr-code/?size=500x500&data=${encodeURIComponent(`วเลส://${userIDs.split(",")[0]}@${hostName}${commonUrlPart}`)}' />
-	<meta name='twitter:card' content='summary_large_image' />
-	<meta name='twitter:title' content='EDtunnel - วเลส configuration and subscribe output' />
-	<meta name='twitter:description' content='Use cloudflare pages and worker severless to implement วเลส protocol' />
-	<meta name='twitter:url' content='https://${hostName}/' />
-	<meta name='twitter:image' content='https://cloudflare-ipfs.com/ipfs/bafybeigd6i5aavwpr6wvnwuyayklq3omonggta4x2q7kpmgafj357nkcky' />
-	<meta property='og:image:width' content='1500' />
-	<meta property='og:image:height' content='1500' />
-
-	<style>
-	body {
-	  font-family: Arial, sans-serif;
-	  background-color: #f0f0f0;
-	  color: #333;
-	  padding: 10px;
-	}
-
-	a {
-	  color: #1a0dab;
-	  text-decoration: none;
-	}
-	img {
-	  max-width: 100%;
-	  height: auto;
-	}
-
-	pre {
-	  white-space: pre-wrap;
-	  word-wrap: break-word;
-	  background-color: #fff;
-	  border: 1px solid #ddd;
-	  padding: 15px;
-	  margin: 10px 0;
-	}
-	/* Dark mode */
-	@media (prefers-color-scheme: dark) {
-	  body {
-		background-color: #333;
-		color: #f0f0f0;
-	  }
-
-	  a {
-		color: #9db4ff;
-	  }
-
-	  pre {
-		background-color: #282a36;
-		border-color: #6272a4;
-	  }
-	}
-	</style>
-
-	<!-- Add FontAwesome library -->
-	<link rel='stylesheet' href='https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css'>
-  </head>
-  `;
-
-	// Join output with newlines, wrap inside <html> and <body>
-	return `
-  <html>
-  ${htmlHead}
-  <body>
-  <pre style='background-color: transparent; border: none;'>${header}</pre>
-  <pre>${output}</pre>
-  </body>
-  <script>
-	function copyToClipboard(text) {
-	  navigator.clipboard.writeText(text)
-		.then(() => {
-		  alert("Copied to clipboard");
-		})
-		.catch((err) => {
-		  console.error("Failed to copy to clipboard:", err);
-		});
-	}
-  </script>
-  </html>`;
-}
-
-const เซ็ตพอร์ตHttp = new Set([80, 8080, 8880, 2052, 2086, 2095, 2082]);
-const เซ็ตพอร์ตHttps = new Set([443, 8443, 2053, 2096, 2087, 2083]);
-
-function สร้างวเลสSub(ไอดีผู้ใช้_เส้นทาง, ชื่อโฮสต์) {
-	const อาร์เรย์ไอดีผู้ใช้ = ไอดีผู้ใช้_เส้นทาง.includes(',') ? ไอดีผู้ใช้_เส้นทาง.split(',') : [ไอดีผู้ใช้_เส้นทาง];
-	const ส่วนUrlทั่วไปHttp = `?encryption=none&security=none&fp=random&type=ws&host=${ชื่อโฮสต์}&path=%2F%3Fed%3D2048#`;
-	const ส่วนUrlทั่วไปHttps = `?encryption=none&security=tls&sni=${ชื่อโฮสต์}&fp=random&type=ws&host=${ชื่อโฮสต์}&path=%2F%3Fed%3D2048#`;
-
-	const ผลลัพธ์ = อาร์เรย์ไอดีผู้ใช้.flatMap((ไอดีผู้ใช้) => {
-		const การกำหนดค่าHttp = Array.from(เซ็ตพอร์ตHttp).flatMap((พอร์ต) => {
-			if (!ชื่อโฮสต์.includes('pages.dev')) {
-				const ส่วนUrl = `${ชื่อโฮสต์}-HTTP-${พอร์ต}`;
-				const วเลสหลักHttp = atob(pt) + '://' + ไอดีผู้ใช้ + atob(at) + ชื่อโฮสต์ + ':' + พอร์ต + ส่วนUrlทั่วไปHttp + ส่วนUrl;
-				return พร็อกซีไอพีs.flatMap((พร็อกซีไอพี) => {
-					const วเลสรองHttp = atob(pt) + '://' + ไอดีผู้ใช้ + atob(at) + พร็อกซีไอพี + ':' + พอร์ต + ส่วนUrlทั่วไปHttp + ส่วนUrl + '-' + พร็อกซีไอพี + '-' + atob(ed);
-					return [วเลสหลักHttp, วเลสรองHttp];
-				});
-			}
-			return [];
-		});
-
-		const การกำหนดค่าHttps = Array.from(เซ็ตพอร์ตHttps).flatMap((พอร์ต) => {
-			const ส่วนUrl = `${ชื่อโฮสต์}-HTTPS-${พอร์ต}`;
-			const วเลสหลักHttps = atob(pt) + '://' + ไอดีผู้ใช้ + atob(at) + ชื่อโฮสต์ + ':' + พอร์ต + ส่วนUrlทั่วไปHttps + ส่วนUrl;
-			return พร็อกซีไอพีs.flatMap((พร็อกซีไอพี) => {
-				const วเลสรองHttps = atob(pt) + '://' + ไอดีผู้ใช้ + atob(at) + พร็อกซีไอพี + ':' + พอร์ต + ส่วนUrlทั่วไปHttps + ส่วนUrl + '-' + พร็อกซีไอพี + '-' + atob(ed);
-				return [วเลสหลักHttps, วเลสรองHttps];
-			});
-		});
-
-		return [...การกำหนดค่าHttp, ...การกำหนดค่าHttps];
-	});
-
-	return ผลลัพธ์.join('\n');
-}
-
-const cn_hostnames = [
-	'weibo.com',                // Weibo - A popular social media platform
-	'www.baidu.com',            // Baidu - The largest search engine in China
-	'www.qq.com',               // QQ - A widely used instant messaging platform
-	'www.taobao.com',           // Taobao - An e-commerce website owned by Alibaba Group
-	'www.jd.com',               // JD.com - One of the largest online retailers in China
-	'www.sina.com.cn',          // Sina - A Chinese online media company
-	'www.sohu.com',             // Sohu - A Chinese internet service provider
-	'www.tmall.com',            // Tmall - An online retail platform owned by Alibaba Group
-	'www.163.com',              // NetEase Mail - One of the major email providers in China
-	'www.zhihu.com',            // Zhihu - A popular question-and-answer website
-	'www.youku.com',            // Youku - A Chinese video sharing platform
-	'www.xinhuanet.com',        // Xinhua News Agency - Official news agency of China
-	'www.douban.com',           // Douban - A Chinese social networking service
-	'www.meituan.com',          // Meituan - A Chinese group buying website for local services
-	'www.toutiao.com',          // Toutiao - A news and information content platform
-	'www.ifeng.com',            // iFeng - A popular news website in China
-	'www.autohome.com.cn',      // Autohome - A leading Chinese automobile online platform
-	'www.360.cn',               // 360 - A Chinese internet security company
-	'www.douyin.com',           // Douyin - A Chinese short video platform
-	'www.kuaidi100.com',        // Kuaidi100 - A Chinese express delivery tracking service
-	'www.wechat.com',           // WeChat - A popular messaging and social media app
-	'www.csdn.net',             // CSDN - A Chinese technology community website
-	'www.imgo.tv',              // ImgoTV - A Chinese live streaming platform
-	'www.aliyun.com',           // Alibaba Cloud - A Chinese cloud computing company
-	'www.eyny.com',             // Eyny - A Chinese multimedia resource-sharing website
-	'www.mgtv.com',             // MGTV - A Chinese online video platform
-	'www.xunlei.com',           // Xunlei - A Chinese download manager and torrent client
-	'www.hao123.com',           // Hao123 - A Chinese web directory service
-	'www.bilibili.com',         // Bilibili - A Chinese video sharing and streaming platform
-	'www.youth.cn',             // Youth.cn - A China Youth Daily news portal
-	'www.hupu.com',             // Hupu - A Chinese sports community and forum
-	'www.youzu.com',            // Youzu Interactive - A Chinese game developer and publisher
-	'www.panda.tv',             // Panda TV - A Chinese live streaming platform
-	'www.tudou.com',            // Tudou - A Chinese video-sharing website
-	'www.zol.com.cn',           // ZOL - A Chinese electronics and gadgets website
-	'www.toutiao.io',           // Toutiao - A news and information app
-	'www.tiktok.com',           // TikTok - A Chinese short-form video app
-	'www.netease.com',          // NetEase - A Chinese internet technology company
-	'www.cnki.net',             // CNKI - China National Knowledge Infrastructure, an information aggregator
-	'www.zhibo8.cc',            // Zhibo8 - A website providing live sports streams
-	'www.zhangzishi.cc',        // Zhangzishi - Personal website of Zhang Zishi, a public intellectual in China
-	'www.xueqiu.com',           // Xueqiu - A Chinese online social platform for investors and traders
-	'www.qqgongyi.com',         // QQ Gongyi - Tencent's charitable foundation platform
-	'www.ximalaya.com',         // Ximalaya - A Chinese online audio platform
-	'www.dianping.com',         // Dianping - A Chinese online platform for finding and reviewing local businesses
-	'www.suning.com',           // Suning - A leading Chinese online retailer
-	'www.zhaopin.com',          // Zhaopin - A Chinese job recruitment platform
-	'www.jianshu.com',          // Jianshu - A Chinese online writing platform
-	'www.mafengwo.cn',          // Mafengwo - A Chinese travel information sharing platform
-	'www.51cto.com',            // 51CTO - A Chinese IT technical community website
-	'www.qidian.com',           // Qidian - A Chinese web novel platform
-	'www.ctrip.com',            // Ctrip - A Chinese travel services provider
-	'www.pconline.com.cn',      // PConline - A Chinese technology news and review website
-	'www.cnzz.com',             // CNZZ - A Chinese web analytics service provider
-	'www.telegraph.co.uk',      // The Telegraph - A British newspaper website	
-	'www.ynet.com',             // Ynet - A Chinese news portal
-	'www.ted.com',              // TED - A platform for ideas worth spreading
-	'www.renren.com',           // Renren - A Chinese social networking service
-	'www.pptv.com',             // PPTV - A Chinese online video streaming platform
-	'www.liepin.com',           // Liepin - A Chinese online recruitment website
-	'www.881903.com',           // 881903 - A Hong Kong radio station website
-	'www.aipai.com',            // Aipai - A Chinese online video sharing platform
-	'www.ttpaihang.com',        // Ttpaihang - A Chinese celebrity popularity ranking website
-	'www.quyaoya.com',          // Quyaoya - A Chinese online ticketing platform
-	'www.91.com',               // 91.com - A Chinese software download website
-	'www.dianyou.cn',           // Dianyou - A Chinese game information website
-	'www.tmtpost.com',          // TMTPost - A Chinese technology media platform
-	'www.douban.com',           // Douban - A Chinese social networking service
-	'www.guancha.cn',           // Guancha - A Chinese news and commentary website
-	'www.so.com',               // So.com - A Chinese search engine
-	'www.58.com',               // 58.com - A Chinese classified advertising website
-	'www.cnblogs.com',          // Cnblogs - A Chinese technology blog community
-	'www.cntv.cn',              // CCTV - China Central Television official website
-	'www.secoo.com',            // Secoo - A Chinese luxury e-commerce platform
-];
